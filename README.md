@@ -1,16 +1,14 @@
-# Free LinkedIn news agent
+# Weekly LinkedIn posting agent
 
-This job runs every Monday at 13:17 UTC. For the four Mondays from November 23 through December 14, 2026, it scans CMS's official newsroom RSS feed for recent health informatics stories, selects one by headline relevance, writes a short original caption based on Salman's pharmacy operations and business analytics background, checks recent Buffer posts for the article link, and schedules it for two hours after the job runs. Buffer then publishes it automatically. If there is no relevant new story or any connection fails, it does not publish. After December 14, it stops scheduling news.
+Every Monday at 13:17 UTC, GitHub Actions scans the official CMS newsroom RSS feed for a relevant headline. The OpenAI API writes an original post about its implications for pharmacy operations and business analytics. The script checks Buffer for that article URL and, if it is new, schedules the post on the connected personal LinkedIn profile for two hours later. If the feed, generation, or Buffer call fails, the run fails without queuing a post. A successful GitHub run means Buffer accepted a scheduled post; check Buffer's sent status after the due time to confirm LinkedIn publication.
 
-**Set up:**
+## Setup
 
-1. Create a **free** Buffer account and connect **only your personal LinkedIn profile**. This agent schedules its own time, so you do not need a recurring Buffer queue slot.
-2. In Buffer, open Settings → API and create a personal API key. Keep it private; **do not paste it into chat or commit it to GitHub**.
-3. Create a GitHub repository and upload `agent.py` and `.github/workflows/post.yml` with the same directory structure. In the repository, open Settings → Secrets and variables → Actions → New repository secret. Name it `BUFFER_API_KEY` and paste the key there.
-4. In the repository Actions tab, enable the workflow if prompted. Run `python agent.py --dry-run` locally to preview a story. If you manually use **Run workflow** during the pilot dates, it will schedule a real post; check Buffer immediately afterward. A manual run outside the pilot dates will not schedule anything.
+1. Connect your personal LinkedIn profile to Buffer and create a Buffer API key in Buffer Settings → API.
+2. Create an OpenAI Platform API key with API billing enabled. ChatGPT subscription access is separate from API billing.
+3. In this repository, open Settings → Secrets and variables → Actions and add `BUFFER_API_KEY` and `OPENAI_API_KEY` as repository secrets. Never commit keys or paste them into an issue or chat.
+4. Run the workflow manually from Actions to queue one post, then inspect its text and scheduled time in Buffer. To generate a preview without sending to Buffer, run `python agent.py --dry-run` locally with `OPENAI_API_KEY` set in your environment.
 
-You can preview without publishing with `python agent.py --dry-run`. The feed is public and requires internet access. The GitHub workflow needs internet access to CMS and Buffer.
+The default model is `gpt-4.1-mini`. Set `OPENAI_MODEL` as a workflow environment variable if you prefer another model available to your API account. The prompt receives only the CMS headline, so it explicitly avoids unsupported article claims. The source link is appended by the script after generation. Posting continues weekly while the workflow is enabled and a relevant, unposted story appears within the last 21 days. GitHub scheduled runs may start later than the configured time.
 
-This is a rule-based agent and deliberately quotes only the article headline. It does not claim to summarize full articles or invent details. After the news pilot, your existing ChatGPT Monday task can keep preparing original experience-based drafts. A future automatic publishing phase needs factual input from you; do not automate invented personal experiences. The separate ChatGPT Monday draft task can be paused for the four pilot weeks once this agent is verified, so you don't get duplicate drafts.
-
-**Limitations:** A missing feed, disconnected LinkedIn profile, full Buffer free queue, or expired API key prevents publishing. GitHub scheduled jobs can be delayed. The job reports scheduling success, which is not the same as confirming that LinkedIn has published the post. Check Buffer's sent/error status after the scheduled time.
+Buffer's API does not support reading and replying to LinkedIn comments; handle engagement manually in Buffer or LinkedIn.

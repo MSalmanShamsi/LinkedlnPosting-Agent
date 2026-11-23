@@ -1,9 +1,8 @@
-"""Free, weekly LinkedIn publisher: CMS news -> original caption -> Buffer."""
+"""Weekly LinkedIn publisher: CMS news -> OpenAI draft -> Buffer."""
 import argparse
 import datetime as dt
 import json
 import os
-import re
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -12,6 +11,7 @@ from urllib.parse import urlparse
 
 FEED = "https://www.cms.gov/newsroom/rss-feeds"
 API = "https://api.buffer.com"
+OPENAI_API = "https://api.openai.com/v1/responses"
 KEYWORDS = {
     "interoperability": 6, "health technology": 5, "health information": 5,
     "pharmacy": 5, "prescription": 4, "drug benefit": 4,
@@ -52,22 +52,36 @@ def candidates(xml_bytes, today):
     return sorted(found, key=lambda x: (x[0], x[1]), reverse=True)
 
 
-def caption(title, link):
-    low = title.lower()
-    if "pharmacy" in low or "prescription" in low or "drug benefit" in low:
-        perspective = "Working in pharmacy operations has made me curious about how medication and coverage data move between teams and systems."
-        question = "Where do you see the biggest opportunity to make pharmacy data more useful?"
-    elif "claim" in low or "authorization" in low:
-        perspective = "In pharmacy operations, I see how important accurate records and clear handoffs are when investigating insurance and billing questions."
-        question = "Which data handoff creates the most work for your team?"
-    else:
-        perspective = "My work validating pharmacy operations data keeps bringing me back to the value of accurate, usable information across workflows."
-        question = "What would make healthcare data easier to use in your day-to-day work?"
-    # Link to the source; frame the headline as an announcement, not as a proven outcome.
-    return (f"A health informatics update I’m following: {title}\n\n"
-            f"{perspective} With my background in business analytics, I’m interested in how this develops in practice.\n\n"
-            f"{question}\n\nSource: {link}\n\n"
-            "#HealthInformatics #HealthcareAnalytics #PharmacyOperations")
+def caption(title, link, key):
+    """Generate original copy; only the headline is supplied as article evidence."""
+    prompt = (
+        "Write a LinkedIn post for Muhammad Salman Shamsi, an operations analyst "
+        "in pharmacy healthcare with an MS in Business Analytics. He works with "
+        "pharmacy operations data, insurance claim issues, billing reconciliation, "
+        "and data accuracy.\n"
+        "Use this CMS headline as the topic, not as evidence of details inside the article:\n"
+        f"{title}\n\n"
+        "Write 100-160 words in first person, with a clear hook, one practical "
+        "analytics or operations perspective, and one specific question at the end. "
+        "Sound thoughtful and natural. Do not claim to have read the article, cite "
+        "statistics, describe specific policy changes or outcomes, or invent a "
+        "personal anecdote. Do not quote the headline verbatim or write a link-only "
+        "announcement. No markdown formatting, no URLs, no hashtags. Output only "
+        "the post text."
+    )
+    payload = json.dumps({"model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                          "input": prompt, "max_output_tokens": 500}).encode()
+    req = urllib.request.Request(OPENAI_API, data=payload, headers={
+        "Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as response:
+        result = json.load(response)
+    if result.get("status") != "completed":
+        raise RuntimeError("OpenAI did not finish the draft; nothing queued.")
+    draft = "\n".join(part.get("text", "") for item in result.get("output", [])
+                      for part in item.get("content", []) if part.get("type") == "output_text").strip()
+    if not 60 <= len(draft.split()) <= 210 or "http" in draft.lower():
+        raise RuntimeError("Generated draft failed length or link validation; nothing queued.")
+    return f"{draft}\n\nSource: {link}\n\n#HealthcareAnalytics #PharmacyOperations"
 
 
 def graphql(token, query, variables=None):
@@ -121,18 +135,18 @@ def publish(token, channel_id, text):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="Preview without Buffer access or publishing")
+    parser.add_argument("--dry-run", action="store_true", help="Generate a preview without Buffer access or publishing")
     args = parser.parse_args()
     today = dt.datetime.now(dt.timezone.utc).date()
-    if not args.dry_run and not (dt.date(2026, 11, 23) <= today <= dt.date(2026, 12, 14)):
-        print("Outside the four-week news pilot; no post queued.")
-        return
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        raise RuntimeError("OPENAI_API_KEY is missing; nothing queued.")
     stories = candidates(fetch_feed(), today)
     if not stories:
         print("No sufficiently relevant recent CMS news: skipped publishing.")
         return
     if args.dry_run:
-        print(caption(stories[0][2], stories[0][3]))
+        print(caption(stories[0][2], stories[0][3], openai_key))
         return
     token = os.environ.get("BUFFER_API_KEY", "")
     if not token:
@@ -142,7 +156,8 @@ def main():
     for _, day, title, link in stories:
         if any(link in text for text in posted):
             continue
-        result = publish(token, channel["id"], caption(title, link))
+        generated = caption(title, link, openai_key)
+        result = publish(token, channel["id"], generated)
         print(f"Queued CMS story from {day.isoformat()} in Buffer: post ID {result['id']}, due {result['dueAt']}")
         return
     print("All relevant recent CMS stories were already queued or sent; skipped publishing.")
